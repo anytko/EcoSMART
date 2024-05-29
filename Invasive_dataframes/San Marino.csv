@@ -1,0 +1,6 @@
+"scientific_name","scientific_name_type","kingdom","establishment_means","is_invasive","occurrence_status","checklist.name","checklist.iso_countrycode_alpha3","accepted_name.species","accepted_name.kingdom","accepted_name.phylum","accepted_name.class","accepted_name.order","accepted_name.family","accepted_name.habitat"
+"Rattus rattus (Linnaeus, 1758)","species","Animalia","alien","null","present","San Marino","SMR","Rattus rattus","Animalia","Chordata","Mammalia","Rodentia","Muridae","[""terrestrial""]"
+"Myocastor coypus (Molina, 1782)","species","Animalia","alien","null","present","San Marino","SMR","Myocastor coypus","Animalia","Chordata","Mammalia","Rodentia","Myocastoridae","[""terrestrial"",""freshwater""]"
+"Rattus norvegicus (Berkenhout, 1769)","species","Animalia","alien","null","present","San Marino","SMR","Rattus norvegicus","Animalia","Chordata","Mammalia","Rodentia","Muridae","[""terrestrial""]"
+"Aedes albopictus Skuse, 1894","species","Animalia","alien","null","present","San Marino","SMR","Aedes albopictus","Animalia","Arthropoda","Insecta","Diptera","Culicidae","[""terrestrial"",""freshwater""]"
+"Mus musculus Linnaeus, 1758","species","Animalia","alien","null","present","San Marino","SMR","Mus musculus","Animalia","Chordata","Mammalia","Rodentia","Muridae","[""terrestrial""]"

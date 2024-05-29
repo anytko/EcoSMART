@@ -1,0 +1,5 @@
+"scientific_name","scientific_name_type","kingdom","establishment_means","is_invasive","occurrence_status","checklist.name","checklist.iso_countrycode_alpha3","accepted_name.species","accepted_name.kingdom","accepted_name.phylum","accepted_name.class","accepted_name.order","accepted_name.family","accepted_name.habitat"
+"Calophyllum inophyllum L.","species","Plantae","alien","null","present","Ailinginae Atoll","MHL","Calophyllum inophyllum","Plantae","Tracheophyta","Magnoliopsida","Malpighiales","Calophyllaceae","[""terrestrial""]"
+"Eleusine indica (L.) Gaertn.","species","Plantae","alien","null","present","Ailinginae Atoll","MHL","Eleusine indica","Plantae","Tracheophyta","Liliopsida","Poales","Poaceae","[""terrestrial""]"
+"Ipomoea violacea L.","species","Plantae","alien","null","present","Ailinginae Atoll","MHL","Ipomoea violacea","Plantae","Tracheophyta","Magnoliopsida","Solanales","Convolvulaceae","[""terrestrial""]"
+"Rattus exulans (Peale, 1848)","species","Animalia","alien","invasive","present","Ailinginae Atoll","MHL","Rattus exulans","Animalia","Chordata","Mammalia","Rodentia","Muridae","[""terrestrial""]"

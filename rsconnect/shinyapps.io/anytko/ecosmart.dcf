@@ -1,0 +1,10 @@
+name: ecosmart
+title:
+username: anytko
+account: anytko
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 12090357
+bundleId: 8674712
+url: https://anytko.shinyapps.io/ecosmart/
+version: 1
