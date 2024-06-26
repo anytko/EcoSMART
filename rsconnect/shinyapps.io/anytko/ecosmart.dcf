@@ -5,6 +5,6 @@ account: anytko
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 12090357
-bundleId: 8674712
+bundleId: 8674898
 url: https://anytko.shinyapps.io/ecosmart/
 version: 1

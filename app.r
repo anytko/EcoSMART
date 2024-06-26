@@ -215,6 +215,8 @@ create_range_polygons <- function(data_frame, num_cores = 1, min_points = 5, min
   return(range_results)
 }
 
+
+
 # Get continent polygon boundaries
 get_continent_sf <- function(url) {
   # Read the geojson file
@@ -235,23 +237,75 @@ get_continent_sf <- function(url) {
   return(continent_sf)
 }
 
+# Function to clip range polygons to continent boundaries 
+clip_polygons_to_land_shiny <- function(polygons_list, continent_sf) {
+  # Check if the input is NULL
+  if (is.null(polygons_list) || length(polygons_list) == 0) {
+    return(NULL)
+  }
+  
+  clipped_polygons_list <- lapply(polygons_list, function(convex_hulls) {
+    clipped_polygons <- lapply(convex_hulls, function(ch) {
+      tryCatch({
+        # Set the CRS of the input polygon to match the CRS of the continent polygons
+        st_crs(ch) <- st_crs(continent_sf)
+        
+        # Perform the clipping operation
+        land_polygons <- ms_clip(ch, continent_sf)
+        
+        # Ensure validity and clean the geometry
+        if (!is.null(land_polygons) && length(land_polygons) > 0) {
+          valid_polygons <- st_make_valid(land_polygons)
+          if (st_is_empty(valid_polygons)) {
+            return(NULL)
+          } else {
+            return(valid_polygons)
+          }
+        } else {
+          return(NULL)
+        }
+      }, error = function(e) {
+        message(paste("Error clipping polygon:", e$message))
+        return(NULL)
+      })
+    })
+    # Filter out NULL results
+    clipped_polygons <- Filter(Negate(is.null), clipped_polygons)
+    return(clipped_polygons)
+  })
+  
+  return(clipped_polygons_list)
+}
 
 # Function to calculate range size
-calculate_range_size <- function(convex_hulls_list) {
-  if (is.null(convex_hulls_list)) {
+calculate_range_size <- function(clipped_polygons_list) {
+  if (is.null(clipped_polygons_list) || length(clipped_polygons_list) == 0) {
     return(0)
   }
   
-  areas <- sapply(convex_hulls_list, function(ch_list) {
-    sapply(ch_list, function(ch) {
-      st_area(ch) / 1e6  # Convert to square kilometers
-    })
-  })
+  # Initialize a vector to store area sizes
+  areas <- numeric()
   
-  # Flatten the list and calculate the total area
-  total_area <- sum(unlist(areas))
+  # Iterate over each clipped polygon
+  for (clipped_polygons in clipped_polygons_list) {
+    for (clipped_polygon in clipped_polygons) {
+      tryCatch({
+        # Check if the clipped polygon is valid
+        if (st_is_valid(clipped_polygon)) {
+          # Calculate the area and append it to the areas vector
+          area <- st_area(clipped_polygon) / 1e6  # Convert to square kilometers
+          areas <- c(areas, area)
+        }
+      }, error = function(e) {
+        # Handle invalid geometries
+        warning("Error calculating area for clipped polygon: ", conditionMessage(e))
+      })
+    }
+  }
   
-  return(total_area)
+  # Sum the areas to get the total range size
+  range_size <- sum(areas)
+  return(range_size)
 }
 
 
@@ -663,43 +717,87 @@ calculate_cluster_metrics <- function(decade_occurrences, epsilon = 0.075, minPt
   return(cluster_metrics)
 }
 
-clip_polygons_to_land_shiny <- function(polygons_list, continent_sf) {
-  # Check if the input is NULL
-  if (is.null(polygons_list) || length(polygons_list) == 0) {
-    return(NULL)
+# Function for calculating native versus invasive range sizes 
+calculate_range_size_separated <- function(clipped_polygons_list, invasive_country_sf) {
+  if (is.null(clipped_polygons_list) || length(clipped_polygons_list) == 0) {
+    return(list(invasive_range_size = 0, native_range_size = 0))
   }
   
-  clipped_polygons_list <- lapply(polygons_list, function(convex_hulls) {
-    clipped_polygons <- lapply(convex_hulls, function(ch) {
-      # Set the CRS of the input polygon to match the CRS of the continent polygons
-      st_crs(ch) <- st_crs(continent_sf)
-      
-      # Perform the clipping operation
-      land_polygons <- ms_clip(ch, continent_sf)
-      
-      # Ensure validity and clean the geometry
-      if (!is.null(land_polygons) && length(land_polygons) > 0) {
-        valid_polygons <- st_make_valid(land_polygons)
-        if (st_is_empty(valid_polygons)) {
-          return(NULL)
-        } else {
-          return(valid_polygons)
-        }
-      } else {
-        return(NULL)
-      }
-    })
-    # Filter out NULL results
-    clipped_polygons <- Filter(Negate(is.null), clipped_polygons)
-    return(clipped_polygons)
+  # Convert clipped_polygons_list to sf objects
+  clipped_poly_sf <- lapply(clipped_polygons_list[[1]], function(poly) {
+    if (inherits(poly, "sfc_MULTIPOLYGON")) {
+      st_sf(st_sfc(poly))
+    } else if (inherits(poly, "sfc_POLYGON")) {
+      st_sf(st_sfc(poly))
+    } else {
+      stop("Unsupported geometry type")
+    }
   })
   
-  return(clipped_polygons_list)
+  # Convert invasive_country_sf to sf object if not already
+  inv_country_sf <- st_as_sf(invasive_country_sf)
+  
+  # Check for invalid polygons in invasive_country_sf
+  invalid_indices <- which(!st_is_valid(inv_country_sf))
+  if (length(invalid_indices) > 0) {
+    print("Warning: Invalid polygons detected in invasive_country_sf.")
+    print(paste("Invalid indices:", invalid_indices))
+    
+    # Attempt to make polygons valid
+    inv_country_sf <- st_make_valid(inv_country_sf)
+    
+    # Check again for invalid polygons
+    invalid_indices <- which(!st_is_valid(inv_country_sf))
+    if (length(invalid_indices) > 0) {
+      stop("Could not make all polygons in invasive_country_sf valid.")
+    } else {
+      print("All polygons in invasive_country_sf are now valid.")
+    }
+  } else {
+    print("All polygons in invasive_country_sf are valid.")
+  }
+  
+  # Initialize vectors to store area sizes
+  invasive_areas <- numeric()
+  native_areas <- numeric()
+  
+  # Iterate over each clipped polygon
+  for (clipped_polygons in clipped_polygons_list) {
+    for (clipped_polygon in clipped_polygons) {
+      tryCatch({
+        # Check if the clipped polygon is valid
+        if (st_is_valid(clipped_polygon)) {
+          # Check intersection with invasive country polygons
+          intersects <- st_intersects(clipped_polygon, inv_country_sf, sparse = FALSE)
+          
+          if (any(intersects)) {
+            # Calculate area and add to invasive areas
+            area <- st_area(clipped_polygon) / 1e6  # Convert to square kilometers
+            invasive_areas <- c(invasive_areas, area)
+          } else {
+            # Calculate area and add to native areas
+            area <- st_area(clipped_polygon) / 1e6  # Convert to square kilometers
+            native_areas <- c(native_areas, area)
+          }
+        }
+      }, error = function(e) {
+        # Handle invalid geometries
+        warning("Error calculating area for clipped polygon: ", conditionMessage(e))
+      })
+    }
+  }
+  
+  # Sum the areas to get the total range sizes
+  invasive_range_size <- sum(invasive_areas)
+  native_range_size <- sum(native_areas)
+  
+  # Return as a list
+  return(list(invasive_range_size = invasive_range_size, native_range_size = native_range_size))
 }
 
 
 ui <- fluidPage(
-  titlePanel("Eco SMART"),
+  titlePanel("EcoSMART"),
   tags$div(
     style = "font-size: 16px; text-align: left; color: #666; margin-bottom: 14px;",
     "Statistics, Modeling, Analysis of Ranges and Traits"
@@ -718,7 +816,7 @@ ui <- fluidPage(
           tabsetPanel(
             tabPanel("Range Clusters", 
                      leafletOutput("map"),
-                     textOutput("range_size")),
+                    htmlOutput("range_size_html")),
             tabPanel("Occurrences by Decade",
                      sliderTextInput("decade", "Decade", choices = seq(1960, 2020, by = 10), width = "100%", animate = TRUE),
                      uiOutput("map_output")),
@@ -726,7 +824,7 @@ ui <- fluidPage(
                      leafletOutput("cluster_map"),
                      textOutput("avg_dist")),
             tabPanel("Summary Statistics",
-                     textOutput("summary_range_size"),
+                    htmlOutput("summary_range_size_html"),
                      textOutput("summary_avg_dist"))
           )
         )
@@ -735,16 +833,13 @@ ui <- fluidPage(
   )
 )
 
-
-
-
-# New server with cliped boundaries 
-
 server <- function(input, output, session) {
   
   species_name <- reactiveVal()
   convex_hulls_list <- reactiveVal()
   range_size <- reactiveVal(0)
+  invasive_range_size <- reactiveVal(0)
+  native_range_size <- reactiveVal(0)
   range_calc_in_progress <- reactiveVal(FALSE)
   invasive_country_sf <- reactiveVal()
   occurrences_by_decade <- reactiveVal(NULL)
@@ -812,6 +907,16 @@ server <- function(input, output, session) {
         invasive_country_sf_data <- st_as_sf(invasive_country_polygons)
         invasive_country_sf_data <- st_make_valid(invasive_country_sf_data)
         invasive_country_sf(invasive_country_sf_data)
+        
+        # Calculate separated range sizes
+        if (!is.null(convex_hulls) && !is.null(invasive_country_sf_data)) {
+          range_sizes <- calculate_range_size_separated(convex_hulls, invasive_country_sf_data)
+          invasive_range_size(round(range_sizes$invasive_range_size, 3))
+          native_range_size(round(range_sizes$native_range_size, 3))
+        } else {
+          invasive_range_size(0)
+          native_range_size(0)
+        }
         
         # Plot convex hulls on the map
         if (!is.null(convex_hulls)) {
@@ -882,10 +987,14 @@ server <- function(input, output, session) {
   })
 
   # Display range size
-  output$range_size <- renderText({
-    req(range_size())  # Wait for range calculation to complete
-    paste("Estimated Range Size (km^2): ", range_size())
+
+    output$range_size_html <- renderUI({
+    req(range_size(), native_range_size(), invasive_range_size())
+    HTML(paste("Total Range Size (km^2): ", range_size(), "<br>",
+               "&emsp;- Native Range Size (km^2): ", native_range_size(), "<br>",
+               "&emsp;- Invasive Range Size (km^2): ", invasive_range_size()))
   })
+
   
   # Reactive value for selected decade
   selected_decade <- reactiveVal(1960)
@@ -946,9 +1055,11 @@ server <- function(input, output, session) {
   })
   
   # Summary Statistics Outputs
-  output$summary_range_size <- renderText({
-    req(range_size())
-    paste("Total Range Size (km^2):", range_size())
+  output$summary_range_size_html <- renderUI({
+    req(range_size(), native_range_size(), invasive_range_size())
+    HTML(paste("Total Range Size (km^2): ", range_size(), "<br>",
+               "&emsp;- Native Range Size (km^2): ", native_range_size(), "<br>",
+               "&emsp;- Invasive Range Size (km^2): ", invasive_range_size()))
   })
   
   output$summary_avg_dist <- renderText({
@@ -966,5 +1077,3 @@ server <- function(input, output, session) {
 
 # Run the application
 shinyApp(ui = ui, server = server)
-
-
