@@ -15,6 +15,7 @@ library(ggtree)
 library(ggplot2)
 library(maptools)
 library(rmapshaper)
+library(raster)
 
 
 
@@ -795,6 +796,170 @@ calculate_range_size_separated <- function(clipped_polygons_list, invasive_count
   return(list(invasive_range_size = invasive_range_size, native_range_size = native_range_size))
 }
 
+load_rasters <- function(raster_dir, pattern) {
+  # List all the raster files matching the pattern in the specified directory
+  raster_files <- list.files(raster_dir, pattern = pattern, full.names = TRUE)
+  
+  # Initialize a list to store the rasters
+  rasters <- list()
+  
+  # Load each raster file in a loop
+  for (i in seq_along(raster_files)) {
+    # Load the raster
+    raster_file <- raster(raster_files[i])
+    
+    # Optionally store the raster in a list
+    rasters[[i]] <- raster_file
+  }
+  
+  # Return the list of loaded rasters
+  return(rasters)
+}
+
+get_occurrences <- function(data_frame, num_cores = 1, min_points = 5, min_distance = 1, gbif_limit = 2000) {
+  rownames(data_frame) <- gsub("_", " ", rownames(data_frame))
+  
+  species_names <- data_frame$species_name
+  
+  range_results <- lapply(species_names, function(species_name) {
+    message("Processing species:", species_name)
+    
+    # Remove leading numbers from species name using regular expression
+    cleaned_species_name <- gsub("^\\d+\\.", "", species_name)
+    
+    gbif_data <- rgbif::occ_search(
+      scientificName = cleaned_species_name,
+      hasCoordinate = TRUE,
+      limit = gbif_limit
+    )
+    
+    if (length(gbif_data$data) == 0) {
+      message(paste("No data found for", cleaned_species_name))
+      return(NULL) # Return NULL if no data found
+    }
+    
+    # Check if "occurrenceID" column is present
+    if ("occurrenceID" %in% colnames(gbif_data$data)) {
+      # Filter based on specified criteria
+      gbif_data$data <- gbif_data$data %>%
+        dplyr::filter(
+          !is.na(decimalLatitude),
+          !is.na(decimalLongitude),
+          decimalLatitude >= -90 & decimalLatitude <= 90,
+          decimalLongitude >= -180 & decimalLongitude <= 180,
+          decimalLatitude != decimalLongitude,
+          !duplicated(occurrenceID),
+          !is.na(countryCode)
+        )
+    } else {
+      # Handle the case where "occurrenceID" column is not present
+      message("The 'occurrenceID' column is not present in the data frame for ", cleaned_species_name)
+      return(NULL) # Return NULL if no data found
+    }
+    
+    if (nrow(gbif_data$data) == 0) {
+      message(paste("No data left after filtering for", cleaned_species_name))
+      return(NULL) # Return NULL if no data found
+    }
+    
+    gbif_sf <- sf::st_as_sf(gbif_data$data, coords = c("decimalLongitude", "decimalLatitude"))
+    gbif_coords <- sf::st_coordinates(gbif_sf)
+    gbif_coords <- as.data.frame(gbif_coords)
+    cluster_result <- dbscan::dbscan(gbif_coords, eps = min_distance, minPts = min_points)
+    gbif_coords$Cluster <- cluster_result$cluster
+    sdf <- sf::st_as_sf(gbif_coords, coords = c("X", "Y"), crs = 4326)
+    
+    sdf_filtered <- sdf[sdf$Cluster != 0, ]
+    
+    # Return cleaned coordinates dataframe
+    return(sdf_filtered)
+  })
+  
+  # Check if all species have no data, if so, return NULL
+  if(all(sapply(range_results, is.null))) {
+    return(NULL)
+  }
+  
+  # Set names for the list elements based on species names
+  range_results <- setNames(range_results, species_names)
+  
+  return(range_results)
+}
+
+calculate_avg_var <- function(occurrences_list, vars) {
+  
+  # Initialize a list to store results for each species
+  results_list <- list()
+  
+  # Iterate over each species occurrence dataframe
+  for (species_name in names(occurrences_list)) {
+    message("Processing species ", species_name)
+    
+    # Get species occurrence coordinates
+    species_occ <- occurrences_list[[species_name]]
+    
+    # Initialize a list to store average max temperatures for each raster
+    avg_var <- numeric(length = length(vars))
+    
+    # Iterate over each raster
+    for (j in seq_along(vars)) {
+      raster <- vars[[j]]
+      
+      # Extract raster values at occurrence points
+      raster_values <- extract(raster, species_occ)
+      
+      # Compute mean of non-NA values
+      avg_var[j] <- mean(raster_values, na.rm = TRUE)
+    }
+    
+    # Store results for the current species
+    results_list[[species_name]] <- avg_var
+  }
+  
+  return(results_list)
+}
+
+avg_var_to_dataframe_bio_19 <- function(avg_var_results) {
+  # Initialize an empty dataframe
+  df <- data.frame(
+    species_name = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Define the specific indices or variables in the order you want
+  variable_names <- c(
+    "Annual mean temperature", "Mean diurnal range", "Isothermality",
+    "Temperature seasonality", "Max temperature of warmest month",
+    "Min temperature of coldest month", "Temperature Annual Range",
+    "Mean temperature of wettest quarter", "Mean temperature of driest quarter",
+    "Mean temperature of warmest quarter", "Mean temperature of coldest quarter",
+    "Annual precipitation", "Precipitation of wettest month",
+    "Precipitation of driest month", "Precipitation seasonality",
+    "Precipitation of wettest quarter", "Precipitation of driest quarter",
+    "Precipitation of warmest quarter", "Precipitation of coldest quarter"
+  )
+  
+  # Iterate over each species in avg_var_results
+  for (species_name in names(avg_var_results)) {
+    # Extract average variable values for the current species
+    avg_vars <- avg_var_results[[species_name]]
+    
+    # Create a new row for the species in the dataframe
+    species_row <- data.frame(
+      species_name = species_name,
+      t(avg_vars)  # Transpose to convert to row format
+    )
+    
+    # Append the row to the dataframe
+    df <- rbind(df, species_row)
+  }
+  
+  # Rename the columns of the dataframe to represent variable names
+  colnames(df)[-1] <- variable_names
+  
+  return(df)
+}
+
 
 ui <- fluidPage(
   titlePanel("EcoSMART"),
@@ -816,7 +981,7 @@ ui <- fluidPage(
           tabsetPanel(
             tabPanel("Range Clusters", 
                      leafletOutput("map"),
-                    htmlOutput("range_size_html")),
+                     htmlOutput("range_size_html")),
             tabPanel("Occurrences by Decade",
                      sliderTextInput("decade", "Decade", choices = seq(1960, 2020, by = 10), width = "100%", animate = TRUE),
                      uiOutput("map_output")),
@@ -824,14 +989,24 @@ ui <- fluidPage(
                      leafletOutput("cluster_map"),
                      textOutput("avg_dist")),
             tabPanel("Summary Statistics",
-                    htmlOutput("summary_range_size_html"),
-                     textOutput("summary_avg_dist"))
+                     htmlOutput("summary_range_size_html"),
+                     textOutput("summary_avg_dist"),
+                     textOutput("avg_temp"),
+                     textOutput("temp_range"),
+                     textOutput("avg_precipitation")
+            ),
+            tabPanel("Climate Data",
+                     tableOutput("bio_var_table")
+            )
           )
         )
       )
     )
   )
 )
+
+
+
 
 server <- function(input, output, session) {
   
@@ -845,6 +1020,10 @@ server <- function(input, output, session) {
   occurrences_by_decade <- reactiveVal(NULL)
   maps_by_decade <- reactiveVal(NULL)
   avg_dist <- reactiveVal("")
+  bio_vars <- reactiveVal(NULL)
+  avg_temp <- reactiveVal(0)
+  temp_range <- reactiveVal(0)
+  avg_precipitation <- reactiveVal(0)
   
   # Create initial leaflet map
   output$map <- renderLeaflet({
@@ -930,6 +1109,24 @@ server <- function(input, output, session) {
             setView(lng = 0, lat = 0, zoom = 2)
         }
         
+
+        bio_raster_dir <- "climate_data/wc2.1_2.5m_bio"
+        bio_pattern <- "wc2.1_2.5m_bio_\\d{1,2}.tif$"
+        bio_rasters <- load_rasters(bio_raster_dir, bio_pattern)
+        
+        # Corrected input data for get_occurrences function
+        bio_occurrences <- get_occurrences(data, num_cores = 1, min_points = 5, min_distance = 1, gbif_limit = 2000)
+        
+        avg_bio_var_list <- calculate_avg_var(bio_occurrences, bio_rasters)
+        avg_bio_var_df <- avg_var_to_dataframe_bio_19(avg_bio_var_list)
+        
+
+        bio_vars(avg_bio_var_df)
+
+        avg_temp(avg_bio_var_df$`Annual mean temperature`)
+        temp_range(avg_bio_var_df$`Temperature Annual Range`)
+        avg_precipitation(avg_bio_var_df$`Annual precipitation`)
+
         # Update progress bar value
         incProgress(0.3, detail = "Fetching occurrences by decade...")
         
@@ -1061,6 +1258,26 @@ server <- function(input, output, session) {
                "&emsp;- Native Range Size (km^2): ", native_range_size(), "<br>",
                "&emsp;- Invasive Range Size (km^2): ", invasive_range_size()))
   })
+
+  output$bio_var_table <- renderTable({
+    req(bio_vars())
+    bio_vars()
+  })
+
+  output$avg_temp <- renderText({
+  req(avg_temp())
+  paste("Average Temperature (Cº): ", round(avg_temp(), 2))
+})
+
+output$temp_range <- renderText({
+  req(temp_range())
+  paste("Temperature Range (Cº): ", round(temp_range(), 2))
+})
+
+output$avg_precipitation <- renderText({
+  req(avg_precipitation())
+  paste("Average Precipitation (mm): ", round(avg_precipitation(), 2))
+})
   
   output$summary_avg_dist <- renderText({
     req(avg_dist())
@@ -1073,6 +1290,7 @@ server <- function(input, output, session) {
     }
   })
 }
+
 
 
 # Run the application
