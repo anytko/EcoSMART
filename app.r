@@ -928,15 +928,10 @@ avg_var_to_dataframe_bio_19 <- function(avg_var_results) {
   
   # Define the specific indices or variables in the order you want
   variable_names <- c(
-    "Annual mean temperature", "Mean diurnal range", "Isothermality",
-    "Temperature seasonality", "Max temperature of warmest month",
+    "Annual mean temperature", "Max temperature of warmest month",
     "Min temperature of coldest month", "Temperature Annual Range",
-    "Mean temperature of wettest quarter", "Mean temperature of driest quarter",
-    "Mean temperature of warmest quarter", "Mean temperature of coldest quarter",
     "Annual precipitation", "Precipitation of wettest month",
-    "Precipitation of driest month", "Precipitation seasonality",
-    "Precipitation of wettest quarter", "Precipitation of driest quarter",
-    "Precipitation of warmest quarter", "Precipitation of coldest quarter"
+    "Precipitation of driest month"
   )
   
   # Iterate over each species in avg_var_results
