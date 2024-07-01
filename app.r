@@ -16,6 +16,7 @@ library(ggplot2)
 library(maptools)
 library(rmapshaper)
 library(raster)
+library(geodata)
 
 
 
@@ -796,24 +797,64 @@ calculate_range_size_separated <- function(clipped_polygons_list, invasive_count
   return(list(invasive_range_size = invasive_range_size, native_range_size = native_range_size))
 }
 
-load_rasters <- function(raster_dir, pattern) {
-  # List all the raster files matching the pattern in the specified directory
-  raster_files <- list.files(raster_dir, pattern = pattern, full.names = TRUE)
+calculate_species_bbox <- function(occurrences) {
+  if (is.null(occurrences)) return(NULL)
   
-  # Initialize a list to store the rasters
-  rasters <- list()
-  
-  # Load each raster file in a loop
-  for (i in seq_along(raster_files)) {
-    # Load the raster
-    raster_file <- raster(raster_files[i])
-    
-    # Optionally store the raster in a list
-    rasters[[i]] <- raster_file
+  # If occurrences is a list of species occurrences
+  if (inherits(occurrences, "list")) {
+    # Extract the first species' bounding box
+    first_species <- occurrences[[1]]
+  } else {
+    # Assume occurrences is a single species' occurrence
+    first_species <- occurrences
   }
   
-  # Return the list of loaded rasters
-  return(rasters)
+  # Calculate bounding box
+  bbox <- sf::st_bbox(first_species)
+  
+  # Create a list with the extracted values
+  species_bbox <- list(
+    xmin = bbox$xmin,
+    ymin = bbox$ymin,
+    xmax = bbox$xmax,
+    ymax = bbox$ymax
+  )
+  
+  # Return the list
+  return(species_bbox)
+}
+
+download_and_crop_worldclim <- function(species_bbox, vars, output_dir) {
+  # Extract numeric values from species_bbox list
+  xmin <- species_bbox[["xmin"]]
+  ymin <- species_bbox[["ymin"]]
+  xmax <- species_bbox[["xmax"]]
+  ymax <- species_bbox[["ymax"]]
+  
+  # Download WorldClim data for the specified variables and crop to the extent
+  rasters <- worldclim_global(var = "bio", lon = c(xmin, xmax), lat = c(ymin, ymax), path = output_dir, version = "2.1", res = 10)
+  
+  # Crop the downloaded rasters to the extent
+  extent_bbox <- extent(xmin, xmax, ymin, ymax)
+  rasters_cropped <- lapply(rasters, function(raster) {
+    crop(raster, extent_bbox)
+  })
+  
+  return(rasters_cropped)
+}
+
+output_directory <- tempdir()
+
+
+convert_to_RasterLayerList <- function(rasters_list) {
+  raster_layers <- list()
+  
+  for (i in seq_along(rasters_list)) {
+    raster_obj <- raster(rasters_list[[i]])
+    raster_layers[[i]] <- raster_obj
+  }
+  
+  return(raster_layers)
 }
 
 get_occurrences <- function(data_frame, num_cores = 1, min_points = 5, min_distance = 1, gbif_limit = 2000) {
@@ -1001,8 +1042,6 @@ ui <- fluidPage(
 )
 
 
-
-
 server <- function(input, output, session) {
   
   species_name <- reactiveVal()
@@ -1105,14 +1144,20 @@ server <- function(input, output, session) {
         }
         
 
-        bio_raster_dir <- "climate_data/wc2.1_2.5m_bio"
-        bio_pattern <- "wc2.1_2.5m_bio_\\d{1,2}.tif$"
-        bio_rasters <- load_rasters(bio_raster_dir, bio_pattern)
-        
-        # Corrected input data for get_occurrences function
+
         bio_occurrences <- get_occurrences(data, num_cores = 1, min_points = 5, min_distance = 1, gbif_limit = 2000)
-        
-        avg_bio_var_list <- calculate_avg_var(bio_occurrences, bio_rasters)
+
+        bbox <- calculate_species_bbox(bio_occurrences)
+
+        output_directory <- tempdir()
+
+        rasters <- download_and_crop_worldclim(bbox, vars, output_directory)
+
+        raster_list <- convert_to_RasterLayerList(rasters)
+
+        selected_rasters <- list(raster_list[[1]], raster_list[[5]], raster_list[[6]], raster_list[[7]], raster_list[[12]], raster_list[[13]], raster_list[[14]])
+ 
+        avg_bio_var_list <- calculate_avg_var(bio_occurrences, selected_rasters)
         avg_bio_var_df <- avg_var_to_dataframe_bio_19(avg_bio_var_list)
         
 
@@ -1290,3 +1335,5 @@ output$avg_precipitation <- renderText({
 
 # Run the application
 shinyApp(ui = ui, server = server)
+
+
